@@ -595,10 +595,8 @@ class AssistantService:
         return answer, self._citations_from_results(results[:1]), [primary.id]
 
     async def _answer_own_appointments(self, question: str, user: User) -> tuple[str, list[dict[str, object]], list[int]]:
-        patient, provider = await asyncio.gather(
-            asyncio.to_thread(self.patients.get_by_user_id, user.id),
-            asyncio.to_thread(self.providers.get_by_user_id, user.id),
-        )
+        patient = await asyncio.to_thread(self.patients.get_by_user_id, user.id) if user.role == UserRole.patient else None
+        provider = await asyncio.to_thread(self.providers.get_by_user_id, user.id) if user.role == UserRole.provider else None
         if user.role == UserRole.patient and patient is not None:
             appointments, _ = await asyncio.to_thread(
                 self.appointments.list_scoped, patient_id=patient.id, limit=10, offset=0
