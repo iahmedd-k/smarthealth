@@ -30,46 +30,6 @@ The principal runtime services are:
 - Kafka: event publishing and consumer integration
 - Temporal: service publish workflow orchestration
 
-## Startup and Shutdown
-
-### Local startup
-
-```bash
-docker compose up -d
-```
-
-### Application startup
-
-```bash
-uvicorn app.main:app --reload
-```
-
-### Celery worker startup
-
-```bash
-celery -A app.celery_app worker --loglevel=info
-```
-
-### Analytics consumer
-
-```bash
-python -m app.workers.analytics_consumer
-```
-
-### Shutdown
-
-```bash
-docker compose down
-```
-
-Use the volume removal variant only when a clean reset is required:
-
-```bash
-docker compose down -v
-```
-
----
-
 ## Health Checks
 
 ### API health
@@ -91,16 +51,6 @@ curl http://localhost:8000/metrics
 ```
 
 This should return Prometheus-formatted metrics and is the primary endpoint for scraping.
-
-### Swagger UI
-
-Open:
-
-```text
-http://localhost:8000/docs
-```
-
-This is useful for verifying route registration and contract integrity.
 
 ### Service dependencies
 
@@ -149,21 +99,18 @@ Run the application-level checks first:
 pytest -q
 ```
 
-Run the live infrastructure checks with the Compose dependencies running:
+Run integration tests with the required backend dependencies available:
 
 ```bash
-docker compose up -d postgres redis kafka temporal celery-worker celery-beat temporal-worker analytics-consumer
 alembic upgrade head
 pytest -q tests/integration
 ```
 
-For Temporal recovery, start a publish or booking workflow, stop `temporal-worker`, confirm the workflow is still running in the Temporal UI at `http://localhost:8233`, restart the worker, and verify the workflow reaches its terminal state without duplicate appointments or content chunks.
+For Temporal recovery, interrupt a publish or booking worker, inspect workflow history, restart the worker, and verify the workflow reaches its terminal state without duplicate appointments or content chunks.
 
 For Kafka failure recovery, stop Kafka and trigger a domain event. Confirm the event is in `outbox_events` with `status = 'PENDING'` and a stable `event_id`. Restart Kafka and run:
 
-```bash
-celery -A app.celery_app call app.workers.tasks.outbox_tasks.publish_pending_events
-```
+Run the configured outbox publisher task through the Celery worker.
 
 Confirm the same `event_id` is published once and the row has `status = 'PUBLISHED'` and a non-null `published_at`.
 
@@ -180,10 +127,7 @@ Check:
 
 Commands:
 
-```bash
-docker compose ps
-docker compose logs api --tail 200
-```
+Inspect the API process logs and dependency health endpoints.
 
 ### 2. Database connection errors
 
@@ -203,9 +147,7 @@ alembic upgrade head
 
 Check:
 
-```bash
-docker compose logs celery-worker --tail 200
-```
+Inspect the Celery worker logs.
 
 Also verify:
 
@@ -222,11 +164,7 @@ Check:
 - workflow execution logs and workflow status
 - service publish workflow activity failures
 
-Useful endpoint:
-
-```text
-http://localhost:7233
-```
+Inspect the Temporal workflow history and task queue state.
 
 ### 5. Metrics endpoint empty or not scraping
 
@@ -241,25 +179,9 @@ Check:
 
 ## Recovery Procedures
 
-### Graceful restart
+### Process recovery
 
-```bash
-docker compose restart api celery-worker analytics-consumer
-```
-
-### Clean reset
-
-Use this only for environment reset and local development recovery:
-
-```bash
-docker compose down -v
-```
-
-Then restart:
-
-```bash
-docker compose up -d --build
-```
+Restart only the affected API, worker, consumer, or workflow worker after capturing logs and checking in-flight work. A restart must not create a new appointment or event identity.
 
 ### Database recovery
 
@@ -270,7 +192,7 @@ alembic current
 alembic upgrade head
 ```
 
-If a manual reset is required and the environment is non-production, drop and recreate the schema carefully and reseed data.
+Do not drop tables or delete data to resolve an application symptom. Use an Alembic migration or an audited repository-level repair.
 
 ---
 
@@ -301,7 +223,7 @@ Escalate to the engineering owner when:
 This runbook should be reviewed when:
 
 - services are added or removed
-- deployment topology changes
+- backend runtime components change
 - observability pipelines change
 - event contracts or background job flows change
 - monitoring or alert rules change

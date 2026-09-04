@@ -190,6 +190,42 @@ Usage:
 - billing pipeline processing
 - financial reconciliation
 
+---
+
+### notification.scheduled
+
+Producer:
+- notification service after a reminder or confirmation record commits
+
+Payload:
+- notification_id
+- appointment_id
+- user_id
+- notification type
+- status
+- timestamp
+
+Usage:
+- notification lifecycle tracking
+- operational analytics
+
+---
+
+### waitlist.joined and waitlist.promoted
+
+Producer:
+- waitlist service when a patient joins a full slot or is promoted after release
+
+Payload:
+- waitlist_id
+- patient_id
+- slot_id
+- status
+- timestamp
+
+Usage:
+- queue operations and analytics. Promotion must not bypass the atomic slot reservation rule.
+
 ## Event Flow Model
 
 ```mermaid
@@ -211,6 +247,35 @@ flowchart LR
 - Replaying the same event is ignored, so counters are not incremented twice.
 - Kafka delivery failures are logged after the database commit and do not undo a successful domain mutation.
 - Celery task failures are bounded by retry policies and recorded in `failed_jobs`.
+
+## Transactional Outbox Lifecycle
+
+```mermaid
+stateDiagram-v2
+  [*] --> PENDING: domain transaction commits
+  PENDING --> PUBLISHED: broker acknowledges
+  PENDING --> PENDING: transient publish failure
+  PUBLISHED --> PUBLISHED: duplicate retry is ignored
+```
+
+The outbox publisher claims pending rows without changing their event identity. It publishes the stored envelope, then marks the row `PUBLISHED` with its publication timestamp. A crash between publication and marking can cause a broker redelivery; consumers must therefore deduplicate by `event_id`.
+
+## Contract Versioning
+
+Consumers must accept the declared `schema_version`, reject unsupported breaking versions, and tolerate additive fields. A changed meaning, removed field, or changed identifier semantics requires a new schema version and compatibility tests. Event IDs are globally unique per emitted outcome and are never regenerated during retry.
+
+## Event-to-Projection Flow
+
+```mermaid
+flowchart LR
+  MUTATION[Committed service mutation] --> OUTBOX[Outbox row]
+  OUTBOX --> PUBLISH[Publisher]
+  PUBLISH --> TOPIC[app.event-type]
+  TOPIC --> ANALYTICS[Analytics handler]
+  TOPIC --> NOTIFY[Notification handler]
+  ANALYTICS --> DEDUPE[Processed event ID]
+  DEDUPE --> PROJECTION[Analytics tables]
+```
 
 ## Consumer Responsibilities
 

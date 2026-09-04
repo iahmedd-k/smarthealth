@@ -1,13 +1,15 @@
-# SmartHealth System Architecture
+# SmartHealth Backend Architecture
 
-## High-Level Architecture
+## Purpose and Scope
+
+SmartHealth is a single-clinic healthcare operations backend. It provides authenticated APIs for patient access, provider scheduling, service discovery, appointments, billing pre-checks, visit progression, notifications, analytics, and a safety-first assistant.
+
+This document describes backend runtime and ownership boundaries. PostgreSQL is the system of record. Redis, Temporal, Kafka, Celery, and model providers support the system but do not replace its transactional source of truth.
+
+## Architectural Boundaries
 
 ```mermaid
 graph TB
-    subgraph Client["Client & Browser"]
-        WebApp["Web App / Swagger UI"]
-    end
-    
     subgraph API["API Layer (FastAPI)"]
         Auth["Authentication"]
         Endpoints["REST Endpoints"]
@@ -59,8 +61,7 @@ graph TB
         Interactions["AI Interactions DB<br/>Audit & Analytics"]
     end
     
-    Client -->|HTTP/WebSocket| WebApp
-    WebApp -->|REST + SSE| API
+    Caller[Authenticated API caller] -->|REST + SSE| API
     API -->|Routing| Endpoints
     API -->|SSE: text/results, metadata, citations, done| Assistant
     Endpoints -->|Business Logic| Services
@@ -95,7 +96,7 @@ graph TB
     Celery -->|Logs| Logs
     KafkaConsumer -->|Logs| Logs
     
-    style Client fill:#e1f5ff
+    style Caller fill:#e1f5ff
     style API fill:#fff3e0
     style Services fill:#f3e5f5
     style Workflow fill:#e8f5e9
@@ -375,67 +376,6 @@ graph TD
     style Charge fill:#f3e5f5
 ```
 
-## Deployment Architecture (Docker Compose)
 
-```mermaid
-graph LR
-    subgraph Docker["Docker Network"]
-        subgraph API["API Container"]
-            FastAPI["FastAPI App"]
-            migrations["Alembic Migrations"]
-        end
-        
-        subgraph Workers["Worker Containers"]
-            CeleryWorker["Celery Worker"]
-            CeleryBeat["Celery Beat Scheduler"]
-            TemporalWorker["Temporal Worker"]
-            KafkaConsumer["Kafka Consumer"]
-        end
-        
-        subgraph Infrastructure["Infrastructure Services"]
-            PostgreSQL["PostgreSQL 16"]
-            Redis["Redis 7"]
-            Kafka["Kafka + Zookeeper"]
-            Temporal["Temporal Server"]
-        end
-    end
-    
-    FastAPI -->|TCP 5432| PostgreSQL
-    FastAPI -->|TCP 6379| Redis
-    FastAPI -->|TCP 9092| Kafka
-    FastAPI -->|gRPC 7233| Temporal
-    
-    CeleryWorker -->|TCP 5432| PostgreSQL
-    CeleryWorker -->|TCP 6379| Redis
-    CeleryWorker -->|TCP 9092| Kafka
-    
-    CeleryBeat -->|TCP 6379| Redis
-    CeleryBeat -->|Schedule Tasks| CeleryWorker
-    
-    TemporalWorker -->|gRPC 7233| Temporal
-    TemporalWorker -->|TCP 5432| PostgreSQL
-    
-    KafkaConsumer -->|TCP 9092| Kafka
-    KafkaConsumer -->|TCP 5432| PostgreSQL
-    
-    migrations -->|TCP 5432| PostgreSQL
-    
-    style Docker fill:#e3f2fd
-    style API fill:#fff3e0
-    style Workers fill:#fce4ec
-    style Infrastructure fill:#ede7f6
-```
 
-## Deployment: Production Considerations
-
-For production deployments, ensure:
-
-1. **Database**: PostgreSQL with pgvector extension for embeddings
-2. **Cache**: Redis with persistence (RDB or AOF)
-3. **Message Queue**: Kafka with replication factor ≥ 2
-4. **Workflow Engine**: Temporal with Cassandra/PostgreSQL backend
-5. **LLM Provider**: Configured with API keys and rate limits
-6. **Observability**: Prometheus scraping, centralized logging (ELK/Datadog)
-7. **Security**: TLS for all inter-service communication, secrets rotation
-8. **Scaling**: Horizontal pod autoscaling for API and workers
 
