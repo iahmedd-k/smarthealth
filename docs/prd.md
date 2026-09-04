@@ -34,7 +34,7 @@ The system is scoped to one clinic and demonstrates authorization, transactional
 - Workflow activities are idempotent and chunk replacement is atomic at the service persistence boundary.
 - Database mutations use repository methods and commit audit rows with the business mutation.
 - Events carry identifiers and correlation metadata but no patient names, contact details, or clinical PHI.
-- A fresh environment runs with `docker compose up --build`; tests run with `pytest -q` or `make test`.
+- The backend exposes health, readiness, metrics, and version checks; tests run with `pytest -q` or `make test`.
 - Health, metrics, structured JSON logs, and a recovery runbook are available.
 
 ## 5. Milestones
@@ -76,7 +76,6 @@ The system is scoped to one clinic and demonstrates authorization, transactional
 | **AI Assistant - Testing** | No-network test suite with FakeLLM | `tests/conftest_llm.py`, `FakeLLM` class | Full `test_ai_layer_comprehensive.py` suite |
 | **Health & Readiness** | Service liveness and dependency checks | `GET /health`, `GET /health/ready` endpoints | Health endpoint tests |
 | **Metrics** | Prometheus metrics for observability | `GET /metrics`, prometheus-client integration | Metrics endpoint query tests |
-| **Docker Setup** | One-command demo environment | `docker-compose.yml` | `docker compose up --build` verification |
 
 ## 7. Out of scope
 
