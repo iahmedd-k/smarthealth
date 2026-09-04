@@ -42,6 +42,41 @@ class AssistantService:
         self.services = ServiceRepository(db)
         self.slots = SlotRepository(db)
 
+    def _user_context(self, user: User) -> str:
+        profile_id = None
+        if user.role == UserRole.patient and user.patient:
+            profile_id = user.patient.id
+        elif user.role == UserRole.provider and user.provider:
+            profile_id = user.provider.id
+        return "\n".join((
+            f"role={user.role.value}",
+            f"authenticated_user_id={user.id}",
+            f"role_profile_id={profile_id or 'not linked'}",
+        ))
+
+    async def _generate_answer(
+        self,
+        question: str,
+        user: User,
+        context: str,
+        conversation_history: list[dict[str, str]] | None = None,
+    ) -> str:
+        prompt = PROMPT_NAV_V1.format(
+            clinic="SmartHealth",
+            context=context or "No matching clinic data was found.",
+            user_context=self._user_context(user),
+            user_question=question,
+        )
+        if conversation_history:
+            history_context = "\n".join(
+                f"{item['role'].capitalize()}: {item['content']}" for item in conversation_history[-10:]
+            )
+            prompt = f"{prompt}\n\nConversation history (for context only):\n{history_context}"
+        answer_parts: list[str] = []
+        async for token in self.provider.stream(prompt):
+            answer_parts.append(token)
+        return "".join(answer_parts).strip()
+
     async def get_conversation_history(self, conversation_id: UUID | None, user_id: int, limit: int = 5) -> list[dict[str, str]]:
         """
         Retrieve conversation history for multi-turn conversations.
@@ -157,45 +192,50 @@ class AssistantService:
                     answer_parts = [answer]
                     yield {"type": "text", "value": answer}
                 elif decision.intent == "appointment":
-                    answer, citations, retrieved_ids = await self._answer_own_appointments(normalized, user)
+                    context, citations, retrieved_ids = await self._answer_own_appointments(normalized, user)
+                    answer = await self._generate_answer(normalized, user, context, conversation_history)
                     final_answer = answer
                     for token in self._tokenize(answer):
                         answer_parts.append(token)
                         yield {"type": "text", "value": token}
                 elif decision.intent == "booking":
-                    answer = self._booking_guidance()
+                    answer = await self._generate_answer(normalized, user, self._booking_guidance(), conversation_history)
                     final_answer = answer
                     for token in self._tokenize(answer):
                         answer_parts.append(token)
                         yield {"type": "text", "value": token}
                 elif decision.intent == "cancellation":
-                    answer, citations, retrieved_ids = await self._answer_cancellation(user)
+                    context, citations, retrieved_ids = await self._answer_cancellation(user)
+                    answer = await self._generate_answer(normalized, user, context, conversation_history)
                     final_answer = answer
                     for token in self._tokenize(answer):
                         answer_parts.append(token)
                         yield {"type": "text", "value": token}
                 elif decision.intent == "preparation":
                     prior_ids = await self._prior_retrieved_service_ids(user.id, conversation_id)
-                    answer, citations, retrieved_ids = await self._answer_preparation(
+                    context, citations, retrieved_ids = await self._answer_preparation(
                         self._contextual_service_question(normalized, conversation_history),
                         fallback_service_ids=prior_ids,
                     )
+                    answer = await self._generate_answer(normalized, user, context, conversation_history)
                     final_answer = answer
                     for token in self._tokenize(answer):
                         answer_parts.append(token)
                         yield {"type": "text", "value": token}
                 elif decision.intent == "availability":
                     prior_ids = await self._prior_retrieved_service_ids(user.id, conversation_id)
-                    answer, citations, retrieved_ids = await self._answer_availability(
+                    context, citations, retrieved_ids = await self._answer_availability(
                         self._contextual_service_question(normalized, conversation_history),
                         fallback_service_ids=prior_ids,
                     )
+                    answer = await self._generate_answer(normalized, user, context, conversation_history)
                     final_answer = answer
                     for token in self._tokenize(answer):
                         answer_parts.append(token)
                         yield {"type": "text", "value": token}
                 elif listing_question:
-                    answer, citations, retrieved_ids = await self._answer_service_listing()
+                    context, citations, retrieved_ids = await self._answer_service_listing()
+                    answer = await self._generate_answer(normalized, user, context, conversation_history)
                     final_answer = answer
                     for token in self._tokenize(answer):
                         answer_parts.append(token)
@@ -213,6 +253,7 @@ class AssistantService:
                         prompt = PROMPT_NAV_V1.format(
                             clinic="SmartHealth",
                             context="No specific clinic service matched the question. Do not claim that a service is offered. For a greeting or general request for help, respond warmly and ask what the patient would like to find out.",
+                            user_context=self._user_context(user),
                             user_question=normalized,
                         )
                         if conversation_history:
@@ -240,6 +281,7 @@ class AssistantService:
                             prompt = PROMPT_NAV_V1.format(
                                 clinic="SmartHealth",
                                 context=context,
+                                user_context=self._user_context(user),
                                 user_question=normalized,
                             )
                             if conversation_history:
@@ -483,7 +525,12 @@ class AssistantService:
                 [],
             )
         context = await self._service_context_with_availability(results)
-        prompt = PROMPT_NAV_V1.format(clinic="SmartHealth", context=context, user_question=question)
+        prompt = PROMPT_NAV_V1.format(
+            clinic="SmartHealth",
+            context=context,
+            user_context="No personal context is used for this safety response.",
+            user_question=question,
+        )
         answer_parts: list[str] = []
         async for token in self.provider.stream(prompt):
             answer_parts.append(token)

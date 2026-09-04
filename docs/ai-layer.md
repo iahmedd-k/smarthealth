@@ -70,13 +70,15 @@ Protected Health Information (PHI) is scoped at multiple layers:
 
 ### Answer Routing
 
-After safety checks pass, the assistant routes to specialized handlers:
+After safety checks pass, the assistant gathers the appropriate grounded context and sends the question through the configured LLM provider for natural-language composition:
 
-- **Appointment intent**: queries user's own appointment history from the database
-- **Preparation intent**: searches service catalog for preparation instructions
-- **Availability intent**: checks and reports available slots
-- **Navigation intent**: performs semantic search over service descriptions, caches results for identical queries
-- **General navigation**: default fallback; semantic search + LLM synthesis
+- **Appointment intent**: queries the authenticated user's own appointment history and supplies those records to the LLM
+- **Preparation intent**: retrieves service preparation instructions and supplies them to the LLM
+- **Availability intent**: retrieves matching published services and available slots and supplies them to the LLM
+- **Service listing and navigation**: retrieves the published catalog and uses the LLM to answer naturally
+- **Booking, cancellation, and rescheduling**: supplies the supported operation and authenticated context; the LLM explains the next action without claiming completion
+
+The database and authorization layers provide facts; they do not replace the conversational model. The only intentionally hard-coded responses are safety refusals and infrastructure failure messages.
 
 ### Streaming and Caching
 
@@ -131,8 +133,9 @@ This enables audit trails, performance analysis, and safety monitoring.
 
 Prompt templates are versioned in `app/services/assistant_prompts.py`. The safety
 classifier runs before retrieval and uses `PROMPT_SAFETY_V1` as the provider
-contract for model-backed classification where configured. Navigation and report
-generation use `PROMPT_NAV_V1` and `PROMPT_VERSION_REPORT`; the persisted
+contract for model-backed classification where configured. All non-refused
+assistant intents use `PROMPT_NAV_V1`; the prompt includes authenticated role,
+profile identity, retrieved domain facts, and conversation history. The persisted
 `prompt_version` identifies the template used for each generated result.
 
 Raw questions and clinical conversation text are not retained as transcripts.
