@@ -48,10 +48,15 @@ class AssistantService:
             profile_id = user.patient.id
         elif user.role == UserRole.provider and user.provider:
             profile_id = user.provider.id
+        profile_name = " ".join(filter(None, [
+            user.patient.first_name if user.patient else None,
+            user.patient.last_name if user.patient else None,
+        ]))
         return "\n".join((
             f"role={user.role.value}",
             f"authenticated_user_id={user.id}",
             f"role_profile_id={profile_id or 'not linked'}",
+            f"profile_name={profile_name or 'not available'}",
         ))
 
     async def _generate_answer(
@@ -241,7 +246,11 @@ class AssistantService:
                         answer_parts.append(token)
                         yield {"type": "text", "value": token}
                 elif decision.intent == "specialist_navigation":
-                    answer, citations, retrieved_ids = await self._answer_specialist_navigation(normalized)
+                    results = await search_services(self.db, normalized, settings.retrieval_top_k)
+                    context = await self._service_context_with_availability(results)
+                    citations = self._citations_from_results(results)
+                    retrieved_ids = [item["service_id"] for item in results]
+                    answer = await self._generate_answer(normalized, user, context, conversation_history)
                     final_answer = answer
                     for token in self._tokenize(answer):
                         answer_parts.append(token)
@@ -271,35 +280,12 @@ class AssistantService:
                     else:
                         retrieved_ids = [item["service_id"] for item in results]
                         citations = self._citations_from_results(results)
-                        if self._is_service_listing_question(normalized):
-                            final_answer = self._format_service_listing(results)
-                            for token in self._tokenize(final_answer):
-                                answer_parts.append(token)
-                                yield {"type": "text", "value": token}
-                        else:
-                            context = await self._service_context_with_availability(results)
-                            prompt = PROMPT_NAV_V1.format(
-                                clinic="SmartHealth",
-                                context=context,
-                                user_context=self._user_context(user),
-                                user_question=normalized,
-                            )
-                            if conversation_history:
-                                history = conversation_history[-10:]
-                                history_context = "\n".join(
-                                    f"{item['role'].capitalize()}: {item['content']}" for item in history
-                                )
-                                prompt = (
-                                    f"{prompt}\n\nConversation history (for context only):\n"
-                                    f"{history_context}"
-                                )
-                            async for token in self.provider.stream(prompt):
-                                answer_parts.append(token)
-                                yield {"type": "text", "value": token}
-                            final_answer = "".join(answer_parts).strip() or (
-                                f"Based on the clinic services I found, the best match is "
-                                f"{results[0]['service_name']} in {results[0]['department']}."
-                            )
+                        context = await self._service_context_with_availability(results)
+                        answer = await self._generate_answer(normalized, user, context, conversation_history)
+                        for token in self._tokenize(answer):
+                            answer_parts.append(token)
+                            yield {"type": "text", "value": token}
+                        final_answer = answer
 
                         if not listing_question:
                             await self.ai_store.cache_answer(
@@ -487,7 +473,7 @@ class AssistantService:
         return answer, self._citations_from_results(results), service_ids
 
     async def _answer_service_listing(self, *, include_prices: bool = False) -> tuple[str, list[dict[str, object]], list[int]]:
-        services, _ = await asyncio.to_thread(self.services.list_published, offset=0, limit=settings.retrieval_top_k)
+        services, _ = await asyncio.to_thread(self.services.list_published, offset=0, limit=1000)
         if not services:
             return "I don't have any published clinic services to show right now.", [], []
 
@@ -497,10 +483,18 @@ class AssistantService:
                 "service_name": service.name,
                 "department": service.department.name if service.department else "General",
                 "price": service.price,
+                "content": service.description or "No description is listed.",
+                "preparation": service.preparation_instructions or "No preparation instructions are listed.",
             }
             for service in services
         ]
-        return self._format_service_listing(results, include_prices=include_prices), self._citations_from_results(results), [service.id for service in services]
+        context = "\n---\n".join(
+            f"[{item['department']}] {item['service_name']}. {item['content']} "
+            f"Preparation: {item['preparation']}"
+            + (f" Price: ${float(item['price']):.2f}." if include_prices and item["price"] is not None else "")
+            for item in results
+        )
+        return context, self._citations_from_results(results), [service.id for service in services]
 
     async def _answer_safe_logistics_request(self, question: str) -> tuple[str, list[dict[str, object]], list[int]]:
         if self._is_service_listing_question(question):
@@ -621,12 +615,17 @@ class AssistantService:
             )
             scope_label = "clinic"
         else:
-            return "I could not find an appointment profile linked to your account.", [], []
+            return (
+                f"Authenticated user context: {self._user_context(user)}\n"
+                "No appointment profile is linked to this authenticated account.",
+                [],
+                [],
+            )
 
         if not appointments:
-            return f"I could not find any {scope_label} appointments.", [], []
+            return f"Authenticated user context: {self._user_context(user)}\nNo {scope_label} appointments were found.", [], []
 
-        items: list[str] = []
+        items: list[str] = [f"Authenticated user context: {self._user_context(user)}"]
         retrieved_ids: list[int] = []
         now = datetime.now(timezone.utc)
         upcoming_only = bool(re.search(r"\b(upcoming|future|next)\b", question, re.I))
@@ -649,12 +648,12 @@ class AssistantService:
             elif user.role == UserRole.patient:
                 people = f" with {provider_name}"
             items.append(
-                f"Appointment {appointment.id}{people}: {service_name}, scheduled for {scheduled}, "
-                f"booking status {appointment.status.value}, visit status {appointment.visit_status.value}."
+                f"appointment_id={appointment.id}; service={service_name}; scheduled_for={scheduled}; "
+                f"booking_status={appointment.status.value}; visit_status={appointment.visit_status.value}{people}"
             )
         if not items:
-            return "I could not find any upcoming appointments.", [], []
-        answer = " ".join(items)
+            return f"Authenticated user context: {self._user_context(user)}\nNo upcoming appointments were found.", [], []
+        answer = "\n".join(items)
         citations = [{"appointment_id": appointment_id} for appointment_id in retrieved_ids]
         return answer, citations, retrieved_ids
 
