@@ -22,6 +22,19 @@ EMERGENCY_MESSAGE = (
 class SafetyCheck:
     """Conservative, deterministic gate that runs before embeddings or retrieval."""
 
+    _common_typos = {
+        "appoietmente": "appointment",
+        "appoietments": "appointments",
+        "appoietment": "appointment",
+        "appoietmens": "appointments",
+        "appoitment": "appointment",
+        "appoitments": "appointments",
+        "appoitmens": "appointments",
+        "availabel": "available",
+        "serivce": "service",
+        "serivces": "services",
+    }
+
     _medical = re.compile(
         r"\b(diagnos|cause|caused|symptom|fever|temperature|pain|ache|burn\w*|burin\w*|"
         r"treat|treatment|medication|medicine|prescri|dose|dosage|what do i have|"
@@ -38,7 +51,7 @@ class SafetyCheck:
     )
     _preparation = re.compile(r"\b(prepare|preparation|bring|fast|fasting|arrive|metal|instructions)\w*\b", re.I)
     _availability = re.compile(r"\b(available|availability|avialbe|avialability|open slot|open slots|slot|slots|when can i)\w*\b", re.I)
-    _appointment_word = r"app\w{0,10}ment\w*"
+    _appointment_word = r"app(?:\w{0,10}ment\w*|oit\w{0,8})"
     _booking = re.compile(
         r"\b(how (?:can|do) i book|book an appointment|make an appointment|schedule an appointment|"
         r"how to book|i want to book|book that slot|reserve that slot)\b",
@@ -67,7 +80,11 @@ class SafetyCheck:
             raise ValidationError("Question is too long", code="QUESTION_TOO_LONG")
         if self._looks_gibberish(normalized):
             raise ValidationError("Question looks invalid", code="QUESTION_INVALID")
-        return normalized
+        return re.sub(
+            r"\b[A-Za-z]+\b",
+            lambda match: self._common_typos.get(match.group(0).lower(), match.group(0)),
+            normalized,
+        )
 
     def _looks_gibberish(self, question: str) -> bool:
         compact = re.sub(r"\s+", "", question)

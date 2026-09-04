@@ -57,6 +57,15 @@ def test_misspelled_own_appointment_questions_reach_account_lookup():
 
     assert checker.classify("do i have today any appoietmente booked reserverd for me").intent == "appointment"
     assert checker.classify("list down my booked appoietments").intent == "appointment"
+    assert checker.classify("what are my booked appoitmens").intent == "appointment"
+    assert checker.normalize("what are my booked appoitmens") == "what are my booked appointments"
+
+
+def test_common_misspellings_are_normalized_before_intent_routing():
+    checker = SafetyCheck()
+
+    assert checker.classify("list down availabel slots").intent == "availability"
+    assert checker.normalize("any serivces you offered") == "any services you offered"
 
 
 def test_logistics_intents_are_not_collapsed():
